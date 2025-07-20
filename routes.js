@@ -4,9 +4,10 @@ const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
 const { Readable } = require('stream');
 const xlsx = require('xlsx');
-const makeWASocket, { DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { User, Payment, Message, ScheduledMessage } = require('./models');
+const mongoose = require('mongoose');
 
 const router = express.Router();
 
@@ -57,7 +58,7 @@ async function startBaileysSession(userId) {
                 await startBaileysSession(userId);
             } else {
                 sessions.delete(userId);
-                await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappSession: '' });
+                await User.findByIdAndUpdate(userId, { whatsappConnected: false });
                 if (io) io.to(userId).emit('whatsapp_disconnected');
             }
         } else if (connection === 'open') {
@@ -161,7 +162,10 @@ router.get('/me', authMiddleware, async (req, res) => {
 
 router.get('/whatsapp/connect', authMiddleware, async (req, res) => {
     try {
-        if(io) io.sockets.sockets.get(req.query.socketId)?.join(req.userId);
+        if(io && req.query.socketId) {
+             const socket = io.sockets.sockets.get(req.query.socketId);
+             if(socket) socket.join(req.userId);
+        }
         await startBaileysSession(req.userId);
         res.status(200).json({ message: 'Iniciando conexão. Aguarde o QR Code.' });
     } catch (error) {
@@ -276,7 +280,7 @@ router.get('/stats/dashboard', authMiddleware, async(req, res) => {
     today.setHours(0, 0, 0, 0);
     
     const messagesByDay = await Message.aggregate([
-        { $match: { userId: mongoose.Types.ObjectId(req.userId), createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 7)) } } },
+        { $match: { userId: new mongoose.Types.ObjectId(req.userId), createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 7)) } } },
         { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
         { $sort: { _id: 1 } }
     ]);
@@ -318,7 +322,7 @@ router.get('/utils/generate-numbers', authMiddleware, planCheckMiddleware({ minP
         AO: ['91', '92', '93', '94', '99']
     };
 
-    if (!prefixes[country]) return res.status(400).json({ message: 'País inválido.' });
+    if (!prefixes[country] || (country === 'BR' && !areaCode)) return res.status(400).json({ message: 'País ou código de área inválido.' });
     
     for (let i = 0; i < q; i++) {
         const prefix = prefixes[country][Math.floor(Math.random() * prefixes[country].length)];
